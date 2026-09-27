@@ -5,6 +5,7 @@ export interface SendResult {
   status: "SENT" | "FAILED" | "BLOCKED_OPT_OUT";
   providerMessageId: string | null;
   error: string | null;
+  errorCode?: number | null;
 }
 
 /** Sends automated SMS to customers. */
@@ -20,7 +21,12 @@ export class TwilioCustomerMessaging implements CustomerMessagingProvider {
 
   async sendSms(toE164: string, body: string): Promise<SendResult> {
     const result = await sendTwilioSms(this.config, toE164, body, this.fetcher);
-    return { status: result.ok ? "SENT" : "FAILED", providerMessageId: result.providerMessageId, error: result.error };
+    return {
+      status: result.ok ? "SENT" : "FAILED",
+      providerMessageId: result.providerMessageId,
+      error: result.error,
+      errorCode: result.errorCode ?? null,
+    };
   }
 }
 

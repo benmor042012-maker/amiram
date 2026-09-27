@@ -150,11 +150,14 @@ export class LeadRepository {
     return results.map(fromRow);
   }
 
-  /** Most recent lead from `source` with this phone number. */
-  async findLatestByPhone(phoneE164: string, source: string): Promise<Lead | null> {
+  /** Most recent lead with this phone number, optionally from one source. */
+  async findLatestByPhone(phoneE164: string, source?: string): Promise<Lead | null> {
     const row = await this.db
-      .prepare("SELECT * FROM leads WHERE phone_e164 = ? AND source = ? ORDER BY received_at DESC LIMIT 1")
-      .bind(phoneE164, source)
+      .prepare(
+        `SELECT * FROM leads WHERE phone_e164 = ? ${source ? "AND source = ?" : ""}
+         ORDER BY received_at DESC LIMIT 1`,
+      )
+      .bind(...(source ? [phoneE164, source] : [phoneE164]))
       .first<Row>();
     return row ? fromRow(row) : null;
   }

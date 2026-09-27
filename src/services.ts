@@ -7,9 +7,12 @@ import {
 import { LeadSummaryService } from "./ai/LeadSummaryService";
 import { EventRepository } from "./db/eventRepository";
 import { LeadRepository } from "./db/leadRepository";
+import { FollowUpRepository } from "./db/followUpRepository";
 import { MessageRepository } from "./db/messageRepository";
 import { OptOutRepository } from "./db/optOutRepository";
 import type { Env } from "./env";
+import { EstimateFollowUpService } from "./follow-up/EstimateFollowUpService";
+import { OwnerCommandService } from "./follow-up/OwnerCommandService";
 import {
   ConsoleCustomerMessaging,
   OptOutGuardedMessaging,
@@ -29,7 +32,9 @@ export interface Services {
   messages: MessageRepository;
   events: EventRepository;
   optOuts: OptOutRepository;
+  followUpRepo: FollowUpRepository;
   qualification: LeadQualificationService;
+  followUps: EstimateFollowUpService;
   smsInbound: SmsInboundService;
   metrics: MetricsService;
 }
@@ -61,6 +66,13 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}): Serv
       (error) => logError("extraction.failed", error),
     );
 
+  const followUpRepo = new FollowUpRepository(env.DB);
+  const notifier = overrides.notifier ?? createNotifier(env);
+  const customerMessaging = new OptOutGuardedMessaging(
+    overrides.customerMessaging ?? createCustomerMessaging(env),
+    optOuts,
+  );
+
   const qualification = new LeadQualificationService({
     leads,
     messages,
@@ -69,16 +81,34 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}): Serv
     scoring: new LeadScoringService(),
     conversation: new ConversationService(),
     summary: new LeadSummaryService(),
-    notifier: overrides.notifier ?? createNotifier(env),
-    customerMessaging: new OptOutGuardedMessaging(
-      overrides.customerMessaging ?? createCustomerMessaging(env),
-      optOuts,
-    ),
+    notifier,
+    customerMessaging,
     clock: overrides.clock,
   });
-  const smsInbound = new SmsInboundService({ leads, events, optOuts, qualification, clock: overrides.clock });
+  const followUps = new EstimateFollowUpService({
+    followUps: followUpRepo,
+    leads,
+    events,
+    messaging: customerMessaging,
+    notifier,
+    clock: overrides.clock,
+  });
+  const smsInbound = new SmsInboundService({
+    leads,
+    events,
+    optOuts,
+    followUpRepo,
+    qualification,
+    followUps,
+    ownerCommands: new OwnerCommandService(followUps, notifier),
+    ownerPhone: env.OWNER_PHONE,
+    clock: overrides.clock,
+  });
 
-  return { leads, messages, events, optOuts, qualification, smsInbound, metrics: new MetricsService(env.DB) };
+  return {
+    leads, messages, events, optOuts, followUpRepo, qualification, followUps, smsInbound,
+    metrics: new MetricsService(env.DB),
+  };
 }
 
 function twilioConfig(env: Env, purpose: string) {

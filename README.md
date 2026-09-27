@@ -13,7 +13,7 @@ answer phone calls; Joist's AI Receptionist is being evaluated separately for th
 |---|---|
 | 1. Yelp lead automation | Built and tested with simulated leads. Live connection goes through Yelp's official Zapier app ([setup](docs/yelp-zapier-setup.md)). |
 | 2. Website lead automation | Built and tested with simulated submissions: same pipeline, SMS replies to consenting customers, STOP/START handling ([setup](docs/website-form-setup.md)). Needs the real form's plugin/field names. |
-| 3. Estimate follow-up | Later. Joist has no API, webhooks or Zapier app. Joist emails Amiram when an estimate is signed, so that email can stop follow-ups automatically; starting a follow-up is manual for now. |
+| 3. Estimate follow-up | Built and tested with simulated messages: Amiram starts it by SMS (`EST name phone`), texts go out on days 1/3/7 in daytime hours, and it stops on reply, STOP, `WON`/`DONE`, or an invalid number ([details](docs/estimate-follow-up.md)). Joist has no API; its "estimate signed" email can automate the stop once we have a sample. |
 
 ## How a lead flows
 
@@ -52,7 +52,8 @@ src/
   routes/                     yelp.ts (Zapier), website.ts (form webhook), sms.ts (Twilio inbound), admin.ts
   domain/lead.ts              normalized lead model + enums
   lead-sources/               LeadSourceAdapter, YelpLeadAdapter, WebsiteLeadAdapter
-  messaging/                  customer SMS (Twilio / console) with opt-out guard, inbound SMS handling
+  messaging/                  customer SMS (Twilio / console) with opt-out guard, inbound SMS routing
+  follow-up/                  EstimateFollowUpService (sequence + stop conditions), OwnerCommandService (EST/WON/DONE/LIST)
   ai/                         LeadExtractionService (Claude), ConversationService, LeadSummaryService
   qualification/             LeadScoringService, LeadQualificationService (the pipeline)
   notifications/              NotificationProvider, Twilio SMS, console (dev)
@@ -103,7 +104,8 @@ to text Amiram for real, and `CUSTOMER_SMS_PROVIDER=twilio` to text customers
 | POST | `/api/yelp/leads` | `x-webhook-secret` | New Yelp lead from Zapier; returns `{ reply, send_reply, lead_score }` |
 | POST | `/api/yelp/messages` | `x-webhook-secret` | Customer reply in a Yelp thread (if Zapier supports that trigger) |
 | POST | `/api/website/leads` | `x-webhook-secret` (or `webhook_secret` field) | Website form submission (JSON or form-encoded) |
-| POST | `/api/sms/inbound` | Twilio signature | Customer texts: replies continue qualification; STOP/START manage opt-out |
+| POST | `/api/sms/inbound` | Twilio signature | Amiram's commands; customer replies (qualification or follow-up); STOP/START opt-out |
+| GET/POST | `/api/admin/follow-ups[/:id[/accepted\|cancel]]` | Bearer | List, inspect, start, mark accepted, cancel estimate follow-ups |
 | GET | `/api/admin/leads` | Bearer `ADMIN_TOKEN` | Lead list (score, source, status, notified?) |
 | GET | `/api/admin/leads/:id` | Bearer | Full lead, conversation, event log |
 | POST | `/api/admin/leads/:id/status` | Bearer | Amiram marks `CALLBACK_REQUESTED`, `INSPECTION_SCHEDULED`, `WON`, `LOST`, `CLOSED` |
@@ -119,4 +121,5 @@ to text Amiram for real, and `CUSTOMER_SMS_PROVIDER=twilio` to text customers
 - **Twilio:** texting *customers* (website leads, follow-ups) needs A2P 10DLC
   registration. Texting Amiram alone is simpler, but registration should start now.
 - **Joist:** no official API, webhooks or Zapier integration. Estimate
-  follow-up will be triggered manually or via QuickBooks Online if they use it.
+  follow-up is started by Amiram's SMS command; the QuickBooks sync is not
+  used because the accountant owns those books.

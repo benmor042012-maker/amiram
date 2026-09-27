@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { MANUAL_LEAD_STATUSES, type LeadStatus } from "../domain/lead";
+import { InvalidFollowUpError } from "../follow-up/EstimateFollowUpService";
 import { LeadNotFoundError } from "../qualification/LeadQualificationService";
 import { secretsMatch } from "../util/auth";
 
@@ -55,6 +56,38 @@ export const adminRoutes = new Hono<AppEnv>()
       if (error instanceof LeadNotFoundError) return c.json({ error: "not found" }, 404);
       throw error;
     }
+  })
+  .get("/follow-ups", async (c) => {
+    const since = c.req.query("since") ?? new Date(Date.now() - 90 * 86400_000).toISOString();
+    return c.json({ followUps: await c.var.services.followUpRepo.listSince(since) });
+  })
+  .get("/follow-ups/:id", async (c) => {
+    const { followUpRepo } = c.var.services;
+    const followUp = await followUpRepo.findById(c.req.param("id"));
+    if (!followUp) return c.json({ error: "not found" }, 404);
+    return c.json({ followUp, messages: await followUpRepo.listMessages(followUp.id) });
+  })
+  .post("/follow-ups", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { customer_name?: string; phone?: string; estimate_id?: string };
+    try {
+      const result = await c.var.services.followUps.start({
+        customerName: body.customer_name ?? "",
+        phone: body.phone ?? "",
+        estimateExternalId: body.estimate_id ?? null,
+      });
+      return c.json(result, result.created ? 201 : 200);
+    } catch (error) {
+      if (error instanceof InvalidFollowUpError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
+  })
+  .post("/follow-ups/:id/:action{accepted|cancel}", async (c) => {
+    const { followUpRepo, followUps } = c.var.services;
+    const followUp = await followUpRepo.findById(c.req.param("id"));
+    if (!followUp) return c.json({ error: "not found" }, 404);
+    if (c.req.param("action") === "accepted") await followUps.markAccepted(followUp);
+    else await followUps.cancel(followUp);
+    return c.json({ followUp: await followUpRepo.findById(followUp.id) });
   })
   .get("/metrics", async (c) => {
     return c.json(await c.var.services.metrics.compute(c.req.query("from") ?? null, c.req.query("to") ?? null));

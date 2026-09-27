@@ -16,6 +16,14 @@ export interface PilotMetrics {
   won: number;
   optOuts: number;
   customerSmsSkipped: number;
+  followUps: {
+    started: number;
+    messagesSent: number;
+    responded: number;
+    accepted: number;
+    optedOut: number;
+    completedWithoutResponse: number;
+  };
   responseTimeSeconds: { average: number | null; median: number | null; max: number | null };
 }
 
@@ -89,11 +97,39 @@ export class MetricsService {
       won: await statusReached("WON"),
       optOuts: await eventCount("OPTED_OUT"),
       customerSmsSkipped: await eventCount("CUSTOMER_MESSAGE_SKIPPED"),
+      followUps: await this.followUpMetrics(lo, hi),
       responseTimeSeconds: {
         average: values.length ? round(values.reduce((a, b) => a + b, 0) / values.length) : null,
         median: values.length ? round(median(values)) : null,
         max: values.length ? round(values[values.length - 1]!) : null,
       },
+    };
+  }
+
+  /** Follow-ups started in range, by outcome. */
+  private async followUpMetrics(lo: string, hi: string): Promise<PilotMetrics["followUps"]> {
+    const row = await this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS started,
+           SUM(status = 'RESPONDED') AS responded,
+           SUM(status = 'ACCEPTED') AS accepted,
+           SUM(status = 'OPTED_OUT') AS opted_out,
+           SUM(status = 'COMPLETED') AS completed,
+           (SELECT COUNT(*) FROM follow_up_messages m JOIN follow_ups f ON f.id = m.follow_up_id
+             WHERE m.direction = 'OUTBOUND' AND m.delivery_status = 'SENT'
+               AND f.created_at >= ?1 AND f.created_at <= ?2) AS sent
+         FROM follow_ups WHERE created_at >= ?1 AND created_at <= ?2`,
+      )
+      .bind(lo, hi)
+      .first<Record<string, number | null>>();
+    return {
+      started: row?.started ?? 0,
+      messagesSent: row?.sent ?? 0,
+      responded: row?.responded ?? 0,
+      accepted: row?.accepted ?? 0,
+      optedOut: row?.opted_out ?? 0,
+      completedWithoutResponse: row?.completed ?? 0,
     };
   }
 }
