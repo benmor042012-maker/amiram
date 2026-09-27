@@ -30,6 +30,8 @@ export function lead(overrides: Partial<Lead> = {}): Lead {
     responseTimeSeconds: null,
     ownerNotifiedAt: null,
     notifiedScore: null,
+    smsConsent: null,
+    phoneE164: null,
     ...overrides,
   };
 }

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { adminRoutes } from "./routes/admin";
+import { smsRoutes } from "./routes/sms";
+import { websiteRoutes } from "./routes/website";
 import { yelpRoutes } from "./routes/yelp";
 import { createServices, type ServiceOverrides, type Services } from "./services";
 import { logError } from "./util/log";
@@ -16,6 +18,8 @@ export function createApp(overrides: ServiceOverrides = {}) {
     })
     .get("/health", (c) => c.json({ ok: true }))
     .route("/api/yelp", yelpRoutes)
+    .route("/api/website", websiteRoutes)
+    .route("/api/sms", smsRoutes)
     .route("/api/admin", adminRoutes)
     .onError((error, c) => {
       logError("http.unhandled", error, { path: c.req.path });

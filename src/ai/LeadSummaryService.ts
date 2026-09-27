@@ -58,6 +58,9 @@ export class LeadSummaryService {
     lines.push("", "Customer message:", `"${truncate(lead.originalMessage, 300)}"`);
     if (lead.aiSummary) lines.push("", "AI summary:", lead.aiSummary);
     lines.push("", `Why ${score}: ${lead.leadReasons.join("; ") || "n/a"}`);
+    if (lead.source !== "YELP" && !lead.firstAutomatedResponseAt) {
+      lines.push("(Customer was not texted automatically: no SMS consent or no valid mobile number.)");
+    }
     if (lead.extractionMethod === "FALLBACK") {
       lines.push("(AI was unavailable, details may be incomplete; please read the message.)");
     }

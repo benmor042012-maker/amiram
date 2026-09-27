@@ -2,9 +2,11 @@ import type { ConversationService } from "../ai/ConversationService";
 import type { LeadExtractor } from "../ai/LeadExtractionService";
 import type { LeadSummaryService } from "../ai/LeadSummaryService";
 import { conversationConfig } from "../config/conversation";
+import { messagingConfig } from "../config/messaging";
 import type { EventRepository } from "../db/eventRepository";
 import type { LeadRepository } from "../db/leadRepository";
 import type { MessageChannel, MessageRepository } from "../db/messageRepository";
+import type { CustomerMessagingProvider } from "../messaging/CustomerMessagingProvider";
 import {
   emptyFacts,
   mergeFacts,
@@ -28,13 +30,18 @@ export interface QualificationDeps {
   conversation: ConversationService;
   summary: LeadSummaryService;
   notifier: NotificationProvider;
+  customerMessaging: CustomerMessagingProvider;
   clock?: () => Date;
   config?: typeof conversationConfig;
+  messaging?: typeof messagingConfig;
 }
 
 export interface HandleResult {
   lead: Lead;
-  /** Text to send to the customer now, or null to send nothing. */
+  /**
+   * Text for the customer, or null if nothing goes out. For Yelp the caller
+   * (Zapier) posts it; SMS replies have already been sent by the service.
+   */
   reply: string | null;
   duplicate: boolean;
   /**
@@ -51,6 +58,10 @@ const SCORE_RANK: Record<LeadScore, number> = { LOW: 0, WARM: 1, HOT: 2 };
 /** Statuses the automation may advance; anything later is Amiram's call. */
 const AUTOMATED_STATUSES = new Set<LeadStatus>(["NEW", "CONTACTING", "QUALIFYING", "QUALIFIED"]);
 
+/** Where the customer's first message arrives, and where we talk to them. */
+const INBOUND_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "WEBSITE" };
+const REPLY_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "SMS" };
+
 /**
  * The lead pipeline shared by every source:
  * ingest -> extract -> score -> reply -> notify Amiram.
@@ -58,17 +69,19 @@ const AUTOMATED_STATUSES = new Set<LeadStatus>(["NEW", "CONTACTING", "QUALIFYING
 export class LeadQualificationService {
   private readonly clock: () => Date;
   private readonly config: typeof conversationConfig;
+  private readonly messaging: typeof messagingConfig;
 
   constructor(private readonly deps: QualificationDeps) {
     this.clock = deps.clock ?? (() => new Date());
     this.config = deps.config ?? conversationConfig;
+    this.messaging = deps.messaging ?? messagingConfig;
   }
 
   private now(): string {
     return this.clock().toISOString();
   }
 
-  async handleNewLead(input: NormalizedLeadInput, channel: MessageChannel): Promise<HandleResult> {
+  async handleNewLead(input: NormalizedLeadInput): Promise<HandleResult> {
     const { leads, messages, events } = this.deps;
 
     if (input.externalLeadId) {
@@ -86,23 +99,24 @@ export class LeadQualificationService {
     const lead = await leads.create(input, mergeFacts(emptyFacts(), input.knownFacts), receivedAt);
     await events.record(lead.id, "LEAD_RECEIVED", receivedAt, { source: lead.source });
     await messages.add({
-      leadId: lead.id, createdAt: receivedAt, direction: "INBOUND", channel, recipient: "CUSTOMER",
-      body: input.originalMessage, deliveryStatus: "RECEIVED", providerMessageId: null, error: null,
+      leadId: lead.id, createdAt: receivedAt, direction: "INBOUND", channel: INBOUND_CHANNEL[lead.source],
+      recipient: "CUSTOMER", body: input.originalMessage, deliveryStatus: "RECEIVED", providerMessageId: null, error: null,
     });
 
     const analyzed = await this.analyze(lead, [input.originalMessage], input.knownFacts);
-    const reply = this.deps.conversation.buildFirstReply(analyzed);
+    const text = this.deps.conversation.buildFirstReply(analyzed);
+    const reply = text ? await this.deliverToCustomer(analyzed, text, true) : null;
 
     const respondedAt = this.now();
     const updated: Lead = {
       ...analyzed,
+      // No reply delivered means no conversation: Amiram takes it from here.
       conversationStatus: reply && this.deps.conversation.expectsAnswer(analyzed) ? "AWAITING_CUSTOMER" : "CLOSED",
       status: this.automatedStatus(analyzed),
     };
     if (reply) {
       updated.firstAutomatedResponseAt = respondedAt;
       updated.responseTimeSeconds = secondsBetween(receivedAt, respondedAt);
-      await this.recordCustomerReply(updated, reply, channel, respondedAt);
       await events.record(lead.id, "AUTO_RESPONSE_SENT", respondedAt, {
         responseTimeSeconds: updated.responseTimeSeconds,
         // Includes the source's own delay (e.g. Yelp -> Zapier) when known.
@@ -118,21 +132,13 @@ export class LeadQualificationService {
     return { lead: updated, reply, duplicate: false, background: this.maybeNotifyOwner(updated) };
   }
 
-  /** A customer answered in the conversation (e.g. a new Yelp message). */
-  async handleCustomerReply(
-    source: LeadSource,
-    externalLeadId: string,
-    text: string,
-    channel: MessageChannel,
-  ): Promise<HandleResult> {
-    const { leads, messages, events } = this.deps;
-    const lead = await leads.findByExternalId(source, externalLeadId);
-    if (!lead) throw new LeadNotFoundError(`No ${source} lead ${externalLeadId}`);
-
+  /** A customer answered in the conversation (a Yelp message or an SMS). */
+  async handleCustomerReply(lead: Lead, text: string): Promise<HandleResult> {
+    const { messages, events } = this.deps;
     const now = this.now();
     const wasClosed = lead.conversationStatus === "CLOSED";
     await messages.add({
-      leadId: lead.id, createdAt: now, direction: "INBOUND", channel, recipient: "CUSTOMER",
+      leadId: lead.id, createdAt: now, direction: "INBOUND", channel: REPLY_CHANNEL[lead.source], recipient: "CUSTOMER",
       body: text, deliveryStatus: "RECEIVED", providerMessageId: null, error: null,
     });
     await events.record(lead.id, "CUSTOMER_REPLIED", now, { turn: lead.customerTurns + 1 });
@@ -158,13 +164,13 @@ export class LeadQualificationService {
       return { lead: updated, reply: null, duplicate: false, background };
     }
 
-    const reply = this.deps.conversation.buildFollowUpReply(analyzed);
+    const followUp = this.deps.conversation.buildFollowUpReply(analyzed);
+    const reply = followUp ? await this.deliverToCustomer(analyzed, followUp, false) : null;
     const updated: Lead = {
       ...analyzed,
       conversationStatus: reply && this.deps.conversation.expectsAnswer(analyzed) ? "AWAITING_CUSTOMER" : "CLOSED",
       status: this.automatedStatus(analyzed),
     };
-    if (reply) await this.recordCustomerReply(updated, reply, channel, this.now());
     await this.save(updated);
 
     let background: Promise<void>;
@@ -218,7 +224,7 @@ export class LeadQualificationService {
       ? mergeFacts(pickFacts(lead), extraction.facts)
       : mergeFacts(mergeFacts(pickFacts(lead), extraction.facts), knownFacts);
 
-    const score = this.deps.scoring.score(facts);
+    const score = this.deps.scoring.score(facts, { unverified: extraction.method === "FALLBACK" });
     if (extraction.method === "FALLBACK") score.leadReasons.push("AI extraction unavailable");
     await this.deps.events.record(lead.id, "SCORED", this.now(), {
       score: score.leadScore, points: score.points, reasons: score.leadReasons,
@@ -246,13 +252,43 @@ export class LeadQualificationService {
     return lead.qualificationStatus === "COMPLETE" ? "QUALIFIED" : "QUALIFYING";
   }
 
-  private async recordCustomerReply(lead: Lead, body: string, channel: MessageChannel, at: string): Promise<void> {
-    // For Yelp the reply is returned to Zapier, which posts it into the Yelp
-    // thread, so it is recorded as handed off rather than sent.
+  /**
+   * Gets a message to the customer on the lead's channel. Returns the text
+   * that went out (or was handed to Zapier), or null if nothing was sent.
+   */
+  private async deliverToCustomer(lead: Lead, text: string, first: boolean): Promise<string | null> {
+    const channel = REPLY_CHANNEL[lead.source];
+    const base = { leadId: lead.id, direction: "OUTBOUND" as const, channel, recipient: "CUSTOMER" as const };
+
+    if (channel === "YELP") {
+      // Zapier posts it into the Yelp thread, so it is handed off, not sent.
+      await this.deps.messages.add({
+        ...base, createdAt: this.now(), body: text, deliveryStatus: "HANDED_OFF", providerMessageId: null, error: null,
+      });
+      return text;
+    }
+
+    const skip = async (reason: string) => {
+      await this.deps.events.record(lead.id, "CUSTOMER_MESSAGE_SKIPPED", this.now(), { reason });
+      return null;
+    };
+    if (!lead.phoneE164) return skip("no_valid_phone");
+    if (lead.smsConsent === false) return skip("sms_consent_declined");
+    if (lead.smsConsent !== true && this.messaging.requireExplicitSmsConsent) return skip("no_sms_consent");
+
+    const body = first ? `${text}\n\n${this.messaging.firstSmsNotice}` : text;
+    const result = await this.deps.customerMessaging.sendSms(lead.phoneE164, body);
+    if (result.status === "BLOCKED_OPT_OUT") return skip("opted_out");
+
     await this.deps.messages.add({
-      leadId: lead.id, createdAt: at, direction: "OUTBOUND", channel, recipient: "CUSTOMER",
-      body, deliveryStatus: channel === "YELP" ? "HANDED_OFF" : "SENT", providerMessageId: null, error: null,
+      ...base, createdAt: this.now(), body, deliveryStatus: result.status,
+      providerMessageId: result.providerMessageId, error: result.error,
     });
+    if (result.status === "FAILED") {
+      await this.deps.events.record(lead.id, "CUSTOMER_MESSAGE_FAILED", this.now(), { error: result.error });
+      return null;
+    }
+    return body;
   }
 
   /** Notify now if the lead is urgent or we already know enough; else the cron will. */

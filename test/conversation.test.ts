@@ -61,6 +61,8 @@ describe("extraction fallback", () => {
     expect(logged).toBe(true);
     expect(result.method).toBe("FALLBACK");
     expect(result.facts).toMatchObject({ serviceType: "ROOF_LEAK", phone: "310-555-0199", zip: "90210" });
+    const dripping = await extractor.extract({ customerMessages: ["Water is dripping from the ceiling"], knownFacts: {} });
+    expect(dripping.facts.serviceType).toBe("ROOF_LEAK");
     // Never infers urgency or ownership without the AI.
     expect(result.facts.activeLeak).toBeUndefined();
     expect(result.facts.homeOwner).toBeUndefined();

@@ -135,7 +135,7 @@ export class FallbackLeadExtractor implements LeadExtractor {
     const zip = text.match(/\b9\d{4}\b/)?.[0] ?? null;
 
     let serviceType: LeadFacts["serviceType"] = null;
-    if (/\bleak/.test(lower)) serviceType = "ROOF_LEAK";
+    if (/\bleak|\bdrip|water (is |keeps )?(coming|getting|leaking) (in|through)/.test(lower)) serviceType = "ROOF_LEAK";
     else if (/replace|new roof|re-roof|reroof/.test(lower)) serviceType = "ROOF_REPLACEMENT";
     else if (/inspect/.test(lower)) serviceType = "ROOF_INSPECTION";
     else if (/repair/.test(lower)) serviceType = "ROOF_REPAIR";

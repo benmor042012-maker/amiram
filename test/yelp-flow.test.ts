@@ -59,7 +59,7 @@ async function admin(path: string) {
 }
 
 beforeEach(async () => {
-  await env.DB.batch(["lead_events", "messages", "leads"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+  await env.DB.batch(["lead_events", "messages", "leads", "sms_opt_outs"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
   clock = new FakeClock();
   notifier = new ConsoleNotificationProvider();
   extractor = new ScriptedExtractor(
@@ -206,7 +206,6 @@ describe("simulated Yelp lead (step 9)", () => {
         source: "YELP", externalLeadId: "yelp-noai", sourceCreatedAt: null,
         originalMessage: "My roof is leaking, zip 90046", knownFacts: { name: "Dana" }, rawPayload: {},
       },
-      "YELP",
     );
     await result.background;
     expect(result.reply).toContain("Hi Dana");
