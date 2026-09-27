@@ -71,7 +71,7 @@ const FORM = {
 };
 
 beforeEach(async () => {
-  await env.DB.batch(["lead_events", "messages", "leads", "sms_opt_outs"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+  await env.DB.batch(["follow_up_messages", "follow_ups", "lead_events", "messages", "leads", "sms_opt_outs"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
   clock = new FakeClock();
   notifier = new ConsoleNotificationProvider();
   sms = new ConsoleCustomerMessaging();

@@ -2,6 +2,8 @@ export interface NotificationResult {
   ok: boolean;
   providerMessageId: string | null;
   error: string | null;
+  /** Provider error code, when the provider gives one (e.g. Twilio 21211). */
+  errorCode?: number | null;
 }
 
 /** Delivers internal notifications to the business owner (Amiram). */

@@ -29,7 +29,12 @@ export async function sendTwilioSms(
     const data = (await response.json().catch(() => ({}))) as { sid?: string; message?: string; code?: number };
     if (!response.ok) {
       // Twilio's error message/code only; never the request (it holds credentials).
-      return { ok: false, providerMessageId: null, error: `Twilio ${response.status} ${data.code ?? ""} ${data.message ?? ""}`.trim() };
+      return {
+        ok: false,
+        providerMessageId: null,
+        error: `Twilio ${response.status} ${data.code ?? ""} ${data.message ?? ""}`.trim(),
+        errorCode: data.code ?? null,
+      };
     }
     return { ok: true, providerMessageId: data.sid ?? null, error: null };
   } catch (error) {
