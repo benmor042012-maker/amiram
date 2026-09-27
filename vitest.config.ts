@@ -11,6 +11,8 @@ export default defineConfig(async () => {
           bindings: {
             TEST_MIGRATIONS: migrations,
             YELP_WEBHOOK_SECRET: "test-yelp-secret",
+            WEBSITE_WEBHOOK_SECRET: "test-website-secret",
+            TWILIO_AUTH_TOKEN: "test-twilio-token",
             ADMIN_TOKEN: "test-admin-token",
             OWNER_PHONE: "+13105550000",
             NOTIFICATION_PROVIDER: "console",

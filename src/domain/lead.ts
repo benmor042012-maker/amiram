@@ -116,6 +116,11 @@ export interface Lead extends LeadFacts {
   responseTimeSeconds: number | null;
   ownerNotifiedAt: string | null;
   notifiedScore: LeadScore | null;
+
+  /** true = customer explicitly agreed to texts; null = never asked. */
+  smsConsent: boolean | null;
+  /** Normalized from `phone` by the repository; null if not a usable number. */
+  phoneE164: string | null;
 }
 
 /**
@@ -129,6 +134,8 @@ export interface NormalizedLeadInput {
   sourceCreatedAt: string | null;
   originalMessage: string;
   knownFacts: Partial<LeadFacts>;
+  /** Only for sources with a consent checkbox (website form). */
+  smsConsent?: boolean | null;
   rawPayload: unknown;
 }
 

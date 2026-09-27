@@ -1,4 +1,5 @@
 import type { Lead, LeadFacts, NormalizedLeadInput } from "../domain/lead";
+import { toE164 } from "../util/phone";
 
 type Row = Record<string, unknown>;
 
@@ -44,9 +45,11 @@ const COLUMNS: Record<string, string> = {
   responseTimeSeconds: "response_time_seconds",
   ownerNotifiedAt: "owner_notified_at",
   notifiedScore: "notified_score",
+  smsConsent: "sms_consent",
+  phoneE164: "phone_e164",
 };
 
-const BOOLEAN_FIELDS = new Set(["activeLeak", "emergency", "homeOwner", "inspectionRequested"]);
+const BOOLEAN_FIELDS = new Set(["activeLeak", "emergency", "homeOwner", "inspectionRequested", "smsConsent"]);
 
 function toColumnValue(field: string, value: unknown): unknown {
   if (value === undefined) return null;
@@ -94,6 +97,8 @@ export class LeadRepository {
       responseTimeSeconds: null,
       ownerNotifiedAt: null,
       notifiedScore: null,
+      smsConsent: input.smsConsent ?? null,
+      phoneE164: toE164(facts.phone),
     };
     const fields = Object.keys(COLUMNS);
     const columns = [...fields.map((f) => COLUMNS[f]!), "raw_payload"];
@@ -111,7 +116,8 @@ export class LeadRepository {
   }
 
   async update(id: string, changes: Partial<Lead>, now: string): Promise<void> {
-    const entries = Object.entries({ ...changes, updatedAt: now }).filter(
+    const derived = "phone" in changes ? { phoneE164: toE164(changes.phone) } : {};
+    const entries = Object.entries({ ...changes, ...derived, updatedAt: now }).filter(
       ([field]) => field in COLUMNS && field !== "id",
     );
     if (entries.length === 0) return;
@@ -142,6 +148,15 @@ export class LeadRepository {
       .bind(limit)
       .all<Row>();
     return results.map(fromRow);
+  }
+
+  /** Most recent lead from `source` with this phone number. */
+  async findLatestByPhone(phoneE164: string, source: string): Promise<Lead | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM leads WHERE phone_e164 = ? AND source = ? ORDER BY received_at DESC LIMIT 1")
+      .bind(phoneE164, source)
+      .first<Row>();
+    return row ? fromRow(row) : null;
   }
 
   /** Leads never shown to Amiram that were received before `receivedBefore`. */

@@ -12,8 +12,8 @@ answer phone calls; Joist's AI Receptionist is being evaluated separately for th
 | Module | Status |
 |---|---|
 | 1. Yelp lead automation | Built and tested with simulated leads. Live connection goes through Yelp's official Zapier app ([setup](docs/yelp-zapier-setup.md)). |
-| 2. Website lead automation | Next. Will reuse the same pipeline. |
-| 3. Estimate follow-up | Later. Joist has no API, webhooks or Zapier app, so it will start with a manual trigger behind an `EstimateProvider` interface. |
+| 2. Website lead automation | Built and tested with simulated submissions: same pipeline, SMS replies to consenting customers, STOP/START handling ([setup](docs/website-form-setup.md)). Needs the real form's plugin/field names. |
+| 3. Estimate follow-up | Later. Joist has no API, webhooks or Zapier app. Joist emails Amiram when an estimate is signed, so that email can stop follow-ups automatically; starting a follow-up is manual for now. |
 
 ## How a lead flows
 
@@ -28,6 +28,10 @@ Yelp "New Lead" ─► Zapier ─► POST /api/yelp/leads
           JSON { reply } ─► Zapier ─► Yelp "Create Message"   (customer gets the reply)
           background ─────► NotificationProvider (Twilio SMS) ─► Amiram
 ```
+
+Website form submissions (`POST /api/website/leads`) go through the same
+pipeline; the reply goes out by SMS, only to customers who ticked the SMS
+consent box, and their texted answers come back via `POST /api/sms/inbound`.
 
 - **AI does not score.** Claude only extracts facts and writes a neutral
   summary for Amiram. `src/config/scoring.ts` alone decides HOT/WARM/LOW.
@@ -45,9 +49,10 @@ Yelp "New Lead" ─► Zapier ─► POST /api/yelp/leads
 ```
 src/
   index.ts / app.ts           Worker entry (HTTP + cron), thin Hono routes
-  routes/                     yelp.ts (Zapier webhooks), admin.ts (read-only ops view + metrics)
+  routes/                     yelp.ts (Zapier), website.ts (form webhook), sms.ts (Twilio inbound), admin.ts
   domain/lead.ts              normalized lead model + enums
-  lead-sources/               LeadSourceAdapter, YelpLeadAdapter
+  lead-sources/               LeadSourceAdapter, YelpLeadAdapter, WebsiteLeadAdapter
+  messaging/                  customer SMS (Twilio / console) with opt-out guard, inbound SMS handling
   ai/                         LeadExtractionService (Claude), ConversationService, LeadSummaryService
   qualification/             LeadScoringService, LeadQualificationService (the pipeline)
   notifications/              NotificationProvider, Twilio SMS, console (dev)
@@ -88,7 +93,8 @@ npm run deploy
 ```
 
 Set `NOTIFICATION_PROVIDER=twilio` and the `TWILIO_*` / `OWNER_PHONE` secrets
-to text Amiram for real.
+to text Amiram for real, and `CUSTOMER_SMS_PROVIDER=twilio` to text customers
+(only after A2P 10DLC approval).
 
 ## API
 
@@ -96,6 +102,8 @@ to text Amiram for real.
 |---|---|---|---|
 | POST | `/api/yelp/leads` | `x-webhook-secret` | New Yelp lead from Zapier; returns `{ reply, send_reply, lead_score }` |
 | POST | `/api/yelp/messages` | `x-webhook-secret` | Customer reply in a Yelp thread (if Zapier supports that trigger) |
+| POST | `/api/website/leads` | `x-webhook-secret` (or `webhook_secret` field) | Website form submission (JSON or form-encoded) |
+| POST | `/api/sms/inbound` | Twilio signature | Customer texts: replies continue qualification; STOP/START manage opt-out |
 | GET | `/api/admin/leads` | Bearer `ADMIN_TOKEN` | Lead list (score, source, status, notified?) |
 | GET | `/api/admin/leads/:id` | Bearer | Full lead, conversation, event log |
 | POST | `/api/admin/leads/:id/status` | Bearer | Amiram marks `CALLBACK_REQUESTED`, `INSPECTION_SCHEDULED`, `WON`, `LOST`, `CLOSED` |

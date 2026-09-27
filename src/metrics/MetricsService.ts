@@ -14,6 +14,8 @@ export interface PilotMetrics {
   callbacksRequested: number;
   inspectionsScheduled: number;
   won: number;
+  optOuts: number;
+  customerSmsSkipped: number;
   responseTimeSeconds: { average: number | null; median: number | null; max: number | null };
 }
 
@@ -85,6 +87,8 @@ export class MetricsService {
       callbacksRequested: await statusReached("CALLBACK_REQUESTED"),
       inspectionsScheduled: await statusReached("INSPECTION_SCHEDULED"),
       won: await statusReached("WON"),
+      optOuts: await eventCount("OPTED_OUT"),
+      customerSmsSkipped: await eventCount("CUSTOMER_MESSAGE_SKIPPED"),
       responseTimeSeconds: {
         average: values.length ? round(values.reduce((a, b) => a + b, 0) / values.length) : null,
         median: values.length ? round(median(values)) : null,

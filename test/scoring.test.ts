@@ -64,6 +64,15 @@ describe("LeadScoringService", () => {
     expect(result.leadReasons).toContain("Location not confirmed");
   });
 
+  it("never scores an unverified (non-AI) lead below WARM unless it is out of area", () => {
+    const unread = facts({ intent: null, city: "Van Nuys" });
+    expect(scoring.score(unread).leadScore).toBe("LOW");
+    const result = scoring.score(unread, { unverified: true });
+    expect(result.leadScore).toBe("WARM");
+    expect(result.leadReasons).toContain("Needs manual review");
+    expect(scoring.score(facts({ intent: null, zip: "85001" }), { unverified: true }).leadScore).toBe("LOW");
+  });
+
   it("is deterministic", () => {
     const input = facts({ serviceType: "ROOF_REPAIR", homeOwner: true, zip: "90046" });
     expect(scoring.score(input)).toEqual(scoring.score(input));

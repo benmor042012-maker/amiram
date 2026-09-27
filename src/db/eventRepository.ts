@@ -9,7 +9,11 @@ export type LeadEventType =
   | "QUALIFIED"
   | "OWNER_NOTIFIED"
   | "OWNER_NOTIFICATION_FAILED"
-  | "STATUS_CHANGED";
+  | "STATUS_CHANGED"
+  | "CUSTOMER_MESSAGE_SKIPPED"
+  | "CUSTOMER_MESSAGE_FAILED"
+  | "OPTED_OUT"
+  | "OPTED_IN";
 
 export interface LeadEvent {
   id: string;

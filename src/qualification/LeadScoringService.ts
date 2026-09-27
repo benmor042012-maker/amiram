@@ -19,7 +19,20 @@ export class LeadScoringService {
     private readonly area = serviceAreaConfig,
   ) {}
 
-  score(facts: LeadFacts): ScoreResult {
+  /**
+   * @param options.unverified the facts came from the non-AI fallback, so a
+   *   missing signal may just be unread. Such a lead is never scored below
+   *   WARM (unless it is known to be out of area), so a person reviews it.
+   */
+  score(facts: LeadFacts, options: { unverified?: boolean } = {}): ScoreResult {
+    const result = this.scoreFacts(facts);
+    if (options.unverified && result.leadScore === "LOW" && result.serviceArea !== "OUT_OF_AREA") {
+      return { ...result, leadScore: "WARM", leadReasons: [...result.leadReasons, "Needs manual review"] };
+    }
+    return result;
+  }
+
+  private scoreFacts(facts: LeadFacts): ScoreResult {
     const serviceArea = this.evaluateServiceArea(facts);
     const context = { ...facts, serviceArea };
 

@@ -10,6 +10,7 @@ export interface Env {
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_FROM_NUMBER?: string;
+  CUSTOMER_SMS_PROVIDER?: "console" | "twilio";
 
   YELP_WEBHOOK_SECRET?: string;
   WEBSITE_WEBHOOK_SECRET?: string;
