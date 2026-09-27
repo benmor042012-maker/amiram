@@ -1,0 +1,22 @@
+name = "family-roofing-leads"
+main = "src/index.ts"
+compatibility_date = "2026-08-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Every 5 minutes: notify Amiram about leads that stopped replying before
+# qualification finished (see LeadQualificationService.processTimeouts).
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family-roofing-leads"
+# Replace with the id printed by `wrangler d1 create family-roofing-leads`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Non-secret settings. Secrets (API keys, tokens, phone numbers) are set with
+# `wrangler secret put <NAME>` in production and `.dev.vars` locally.
+[vars]
+CLAUDE_MODEL = "claude-opus-5"
+NOTIFICATION_PROVIDER = "console"
