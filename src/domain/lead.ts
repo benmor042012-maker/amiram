@@ -30,7 +30,7 @@ export const LEAD_INTENTS = [
 ] as const;
 export type LeadIntent = (typeof LEAD_INTENTS)[number];
 
-export type LeadSource = "YELP" | "WEBSITE";
+export type LeadSource = "YELP" | "WEBSITE" | "PHONE";
 export type LeadScore = "HOT" | "WARM" | "LOW";
 export type ServiceAreaStatus = "IN_AREA" | "OUT_OF_AREA" | "UNKNOWN";
 

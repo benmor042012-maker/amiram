@@ -31,7 +31,7 @@ const TIMEFRAME_LABEL: Record<Timeframe, string> = {
   FLEXIBLE: "Flexible",
 };
 
-const SOURCE_LABEL = { YELP: "Yelp", WEBSITE: "Website" } as const;
+const SOURCE_LABEL = { YELP: "Yelp", WEBSITE: "Website", PHONE: "Phone call" } as const;
 
 /**
  * Builds the text Amiram receives. The AI summary comes from the extraction
@@ -55,10 +55,10 @@ export class LeadSummaryService {
       `Timing: ${lead.desiredTimeframe ? TIMEFRAME_LABEL[lead.desiredTimeframe] : "Unknown"}`,
     ];
     if (lead.preferredContactTime) lines.push(`Best time: ${lead.preferredContactTime}`);
-    lines.push("", "Customer message:", `"${truncate(lead.originalMessage, 300)}"`);
+    lines.push("", lead.source === "PHONE" ? "Caller said:" : "Customer message:", `"${truncate(lead.originalMessage, 300)}"`);
     if (lead.aiSummary) lines.push("", "AI summary:", lead.aiSummary);
     lines.push("", `Why ${score}: ${lead.leadReasons.join("; ") || "n/a"}`);
-    if (lead.source !== "YELP" && !lead.firstAutomatedResponseAt) {
+    if (lead.source === "WEBSITE" && !lead.firstAutomatedResponseAt) {
       lines.push("(Customer was not texted automatically: no SMS consent or no valid mobile number.)");
     }
     if (lead.extractionMethod === "FALLBACK") {

@@ -1,5 +1,5 @@
 export type MessageDirection = "INBOUND" | "OUTBOUND";
-export type MessageChannel = "YELP" | "SMS" | "EMAIL" | "WEBSITE";
+export type MessageChannel = "YELP" | "SMS" | "EMAIL" | "WEBSITE" | "VOICE";
 export type MessageRecipient = "CUSTOMER" | "OWNER";
 /** HANDED_OFF = returned to an integration (e.g. Zapier) that performs the send. */
 export type DeliveryStatus = "RECEIVED" | "SENT" | "HANDED_OFF" | "FAILED";

@@ -25,6 +25,20 @@ export interface PilotMetrics {
     completedWithoutResponse: number;
   };
   responseTimeSeconds: { average: number | null; median: number | null; max: number | null };
+  calls: {
+    received: number;
+    rangOwner: number;
+    answered: number;
+    missed: number;
+    /** Spam / sales calls ended by the screener. */
+    filtered: number;
+    blocked: number;
+    sentToVoicemail: number;
+    /** Never answered the screening question (mostly robocalls). */
+    noResponse: number;
+    voicemails: number;
+    byReason: Record<string, number>;
+  };
 }
 
 /** Pilot metrics computed from the leads table and the event log. */
@@ -98,11 +112,51 @@ export class MetricsService {
       optOuts: await eventCount("OPTED_OUT"),
       customerSmsSkipped: await eventCount("CUSTOMER_MESSAGE_SKIPPED"),
       followUps: await this.followUpMetrics(lo, hi),
+      calls: await this.callMetrics(lo, hi),
       responseTimeSeconds: {
         average: values.length ? round(values.reduce((a, b) => a + b, 0) / values.length) : null,
         median: values.length ? round(median(values)) : null,
         max: values.length ? round(values[values.length - 1]!) : null,
       },
+    };
+  }
+
+  /** Calls received in range, by screening decision and outcome. */
+  private async callMetrics(lo: string, hi: string): Promise<PilotMetrics["calls"]> {
+    const row = await this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS received,
+           SUM(decision IN ('RING', 'KNOWN_CALLER')) AS rang,
+           SUM(accepted_at IS NOT NULL) AS answered,
+           SUM(decision IN ('RING', 'KNOWN_CALLER') AND accepted_at IS NULL) AS missed,
+           SUM(decision = 'FILTERED') AS filtered,
+           SUM(decision = 'BLOCKED') AS blocked,
+           SUM(decision = 'VOICEMAIL') AS voicemail,
+           SUM(decision = 'NO_RESPONSE') AS no_response,
+           SUM(voicemail_transcript IS NOT NULL OR outcome = 'VOICEMAIL') AS voicemails
+         FROM calls WHERE received_at >= ? AND received_at <= ?`,
+      )
+      .bind(lo, hi)
+      .first<Record<string, number | null>>();
+    const { results } = await this.db
+      .prepare(
+        `SELECT reason, COUNT(*) AS n FROM calls
+         WHERE received_at >= ? AND received_at <= ? AND reason IS NOT NULL GROUP BY reason`,
+      )
+      .bind(lo, hi)
+      .all<{ reason: string; n: number }>();
+    return {
+      received: row?.received ?? 0,
+      rangOwner: row?.rang ?? 0,
+      answered: row?.answered ?? 0,
+      missed: row?.missed ?? 0,
+      filtered: row?.filtered ?? 0,
+      blocked: row?.blocked ?? 0,
+      sentToVoicemail: row?.voicemail ?? 0,
+      noResponse: row?.no_response ?? 0,
+      voicemails: row?.voicemails ?? 0,
+      byReason: Object.fromEntries(results.map((r) => [r.reason, r.n])),
     };
   }
 

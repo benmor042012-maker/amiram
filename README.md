@@ -4,8 +4,9 @@ An automation layer around Family Roofing's existing tools. It replies to new
 leads right away, qualifies them in a short exchange, scores them with
 deterministic rules, and texts Amiram the leads worth calling.
 
-It does **not** replace Joist (CRM / estimates / invoices) and does **not**
-answer phone calls; Joist's AI Receptionist is being evaluated separately for that.
+It does **not** replace Joist (CRM / estimates / invoices). For phone calls it
+only *screens* (Module 4): it asks unknown callers one question and keeps
+spam and out-of-scope calls off Amiram's phone; it does not hold conversations.
 
 ## Status
 
@@ -14,6 +15,7 @@ answer phone calls; Joist's AI Receptionist is being evaluated separately for th
 | 1. Yelp lead automation | Built and tested with simulated leads. Live connection goes through Yelp's official Zapier app ([setup](docs/yelp-zapier-setup.md)). |
 | 2. Website lead automation | Built and tested with simulated submissions: same pipeline, SMS replies to consenting customers, STOP/START handling ([setup](docs/website-form-setup.md)). Needs the real form's plugin/field names. |
 | 3. Estimate follow-up | Built and tested with simulated messages: Amiram starts it by SMS (`EST name phone`), texts go out on days 1/3/7 in daytime hours, and it stops on reply, STOP, `WON`/`DONE`, or an invalid number ([details](docs/estimate-follow-up.md)). Joist has no API; its "estimate signed" email can automate the stop once we have a sample. |
+| 4. Call screening | Built and tested with simulated Twilio calls: unknown callers say what they need, spam and sales calls are ended, out-of-scope calls go to voicemail, and real jobs ring Amiram with a whisper (score, job, city; press 1). Missed calls text him the summary and voicemail. `CALLS` / `BLOCK` / `ALLOW` by SMS ([details](docs/call-screening.md)). Needs the business number forwarded to Twilio. |
 
 ## How a lead flows
 
@@ -44,16 +46,22 @@ consent box, and their texted answers come back via `POST /api/sms/inbound`.
 - **If Claude is down,** a conservative keyword fallback still replies and
   notifies Amiram, and the notification says the AI was unavailable.
 
+Phone calls (`POST /api/voice/incoming`) are screened before they ring
+Amiram: what an unknown caller says is extracted and scored by the same
+pipeline, then the call is rung through, sent to voicemail, or politely ended
+([details](docs/call-screening.md)).
+
 ## Project layout
 
 ```
 src/
   index.ts / app.ts           Worker entry (HTTP + cron), thin Hono routes
-  routes/                     yelp.ts (Zapier), website.ts (form webhook), sms.ts (Twilio inbound), admin.ts
+  routes/                     yelp.ts (Zapier), website.ts (form webhook), sms.ts (Twilio inbound), voice.ts (Twilio calls), admin.ts
   domain/lead.ts              normalized lead model + enums
   lead-sources/               LeadSourceAdapter, YelpLeadAdapter, WebsiteLeadAdapter
   messaging/                  customer SMS (Twilio / console) with opt-out guard, inbound SMS routing
-  follow-up/                  EstimateFollowUpService (sequence + stop conditions), OwnerCommandService (EST/WON/DONE/LIST)
+  calls/                      CallScreeningService (screen, ring with whisper, voicemail, spam filter)
+  follow-up/                  EstimateFollowUpService (sequence + stop conditions), OwnerCommandService (EST/WON/DONE/LIST/CALLS/BLOCK/ALLOW)
   ai/                         LeadExtractionService (Claude), ConversationService, LeadSummaryService
   qualification/             LeadScoringService, LeadQualificationService (the pipeline)
   notifications/              NotificationProvider, Twilio SMS, console (dev)
@@ -104,12 +112,14 @@ to text Amiram for real, and `CUSTOMER_SMS_PROVIDER=twilio` to text customers
 | POST | `/api/yelp/leads` | `x-webhook-secret` | New Yelp lead from Zapier; returns `{ reply, send_reply, lead_score }` |
 | POST | `/api/yelp/messages` | `x-webhook-secret` | Customer reply in a Yelp thread (if Zapier supports that trigger) |
 | POST | `/api/website/leads` | `x-webhook-secret` (or `webhook_secret` field) | Website form submission (JSON or form-encoded) |
+| POST | `/api/voice/incoming`, `/api/voice/status` | Twilio signature | Business number's voice webhooks (the other `/api/voice/*` paths are TwiML callbacks) |
 | POST | `/api/sms/inbound` | Twilio signature | Amiram's commands; customer replies (qualification or follow-up); STOP/START opt-out |
 | GET/POST | `/api/admin/follow-ups[/:id[/accepted\|cancel]]` | Bearer | List, inspect, start, mark accepted, cancel estimate follow-ups |
 | GET | `/api/admin/leads` | Bearer `ADMIN_TOKEN` | Lead list (score, source, status, notified?) |
 | GET | `/api/admin/leads/:id` | Bearer | Full lead, conversation, event log |
 | POST | `/api/admin/leads/:id/status` | Bearer | Amiram marks `CALLBACK_REQUESTED`, `INSPECTION_SCHEDULED`, `WON`, `LOST`, `CLOSED` |
-| GET | `/api/admin/metrics?from=&to=` | Bearer | Pilot metrics incl. response time |
+| GET | `/api/admin/calls?since=` | Bearer | Screened calls with decision, reason and outcome |
+| GET | `/api/admin/metrics?from=&to=` | Bearer | Pilot metrics incl. response time and call screening |
 
 ## Open items / limitations
 
@@ -120,6 +130,9 @@ to text Amiram for real, and `CUSTOMER_SMS_PROVIDER=twilio` to text customers
   Amiram's confirmation.
 - **Twilio:** texting *customers* (website leads, follow-ups) needs A2P 10DLC
   registration. Texting Amiram alone is simpler, but registration should start now.
+- **Calls:** the business number has to be forwarded (or ported) to Twilio.
+  Which calls ring vs. go to voicemail, after-hours behavior, and Spanish
+  callers need Amiram's input ([details](docs/call-screening.md#to-confirm-with-amiram)).
 - **Joist:** no official API, webhooks or Zapier integration. Estimate
   follow-up is started by Amiram's SMS command; the QuickBooks sync is not
   used because the accountant owns those books.

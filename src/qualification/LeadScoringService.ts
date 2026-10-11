@@ -7,6 +7,8 @@ export interface ScoreResult {
   leadReasons: string[];
   points: number;
   serviceArea: ServiceAreaStatus;
+  /** Ids of the disqualifiers that forced LOW (empty if none). */
+  disqualifiedBy: string[];
 }
 
 /**
@@ -38,7 +40,10 @@ export class LeadScoringService {
 
     const disqualifiers = this.config.disqualifiers.filter((d) => d.when(context));
     if (disqualifiers.length > 0) {
-      return { leadScore: "LOW", leadReasons: disqualifiers.map((d) => d.reason), points: 0, serviceArea };
+      return {
+        leadScore: "LOW", leadReasons: disqualifiers.map((d) => d.reason), points: 0, serviceArea,
+        disqualifiedBy: disqualifiers.map((d) => d.id),
+      };
     }
 
     const matched = this.config.signals.filter((s) => s.when(context));
@@ -49,7 +54,7 @@ export class LeadScoringService {
     const leadReasons = matched.map((s) => s.reason);
     if (serviceArea === "UNKNOWN") leadReasons.push("Location not confirmed");
     if (matched.length === 0) leadReasons.push("Not enough information yet");
-    return { leadScore, leadReasons, points, serviceArea };
+    return { leadScore, leadReasons, points, serviceArea, disqualifiedBy: [] };
   }
 
   evaluateServiceArea(facts: Pick<LeadFacts, "zip" | "city" | "state">): ServiceAreaStatus {
