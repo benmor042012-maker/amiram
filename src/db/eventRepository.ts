@@ -13,7 +13,13 @@ export type LeadEventType =
   | "CUSTOMER_MESSAGE_SKIPPED"
   | "CUSTOMER_MESSAGE_FAILED"
   | "OPTED_OUT"
-  | "OPTED_IN";
+  | "OPTED_IN"
+  | "CALL_SCREENED"
+  | "CALL_FILTERED"
+  | "CALL_RANG_OWNER"
+  | "CALL_ACCEPTED"
+  | "CALL_MISSED"
+  | "VOICEMAIL_RECEIVED";
 
 export interface LeadEvent {
   id: string;

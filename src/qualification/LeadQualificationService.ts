@@ -1,5 +1,5 @@
 import type { ConversationService } from "../ai/ConversationService";
-import type { LeadExtractor } from "../ai/LeadExtractionService";
+import { FallbackLeadExtractor, type LeadExtractor } from "../ai/LeadExtractionService";
 import type { LeadSummaryService } from "../ai/LeadSummaryService";
 import { conversationConfig } from "../config/conversation";
 import { messagingConfig } from "../config/messaging";
@@ -59,8 +59,8 @@ const SCORE_RANK: Record<LeadScore, number> = { LOW: 0, WARM: 1, HOT: 2 };
 const AUTOMATED_STATUSES = new Set<LeadStatus>(["NEW", "CONTACTING", "QUALIFYING", "QUALIFIED"]);
 
 /** Where the customer's first message arrives, and where we talk to them. */
-const INBOUND_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "WEBSITE" };
-const REPLY_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "SMS" };
+const INBOUND_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "WEBSITE", PHONE: "VOICE" };
+const REPLY_CHANNEL: Record<LeadSource, MessageChannel> = { YELP: "YELP", WEBSITE: "SMS", PHONE: "SMS" };
 
 /**
  * The lead pipeline shared by every source:
@@ -132,13 +132,46 @@ export class LeadQualificationService {
     return { lead: updated, reply, duplicate: false, background: this.maybeNotifyOwner(updated) };
   }
 
-  /** A customer answered in the conversation (a Yelp message or an SMS). */
-  async handleCustomerReply(lead: Lead, text: string): Promise<HandleResult> {
+  /**
+   * A screened phone call (Module 4): what the caller said becomes a PHONE
+   * lead, extracted and scored like any other. Nothing is sent to the caller
+   * and Amiram is not notified here; CallScreeningService decides both.
+   *
+   * @param extractionTimeoutMs the caller is waiting on the line, so the AI
+   *   gets a hard time budget; past it the keyword fallback is used.
+   */
+  async ingestCall(input: NormalizedLeadInput, extractionTimeoutMs: number): Promise<{ lead: Lead; duplicate: boolean }> {
+    const { leads, messages, events } = this.deps;
+    if (input.externalLeadId) {
+      const existing = await leads.findByExternalId(input.source, input.externalLeadId);
+      if (existing) return { lead: existing, duplicate: true };
+    }
+
+    const receivedAt = this.now();
+    const lead = await leads.create(input, mergeFacts(emptyFacts(), input.knownFacts), receivedAt);
+    await events.record(lead.id, "LEAD_RECEIVED", receivedAt, { source: lead.source });
+    await messages.add({
+      leadId: lead.id, createdAt: receivedAt, direction: "INBOUND", channel: INBOUND_CHANNEL[lead.source],
+      recipient: "CUSTOMER", body: input.originalMessage, deliveryStatus: "RECEIVED", providerMessageId: null, error: null,
+    });
+
+    const analyzed = await this.analyze(lead, [input.originalMessage], input.knownFacts, { timeoutMs: extractionTimeoutMs });
+    const updated: Lead = { ...analyzed, conversationStatus: "CLOSED", status: this.automatedStatus(analyzed) };
+    await this.save(updated);
+    log("lead.received", { leadId: lead.id, source: lead.source, score: updated.leadScore, intent: updated.intent });
+    return { lead: updated, duplicate: false };
+  }
+
+  /**
+   * A customer answered in the conversation (a Yelp message or an SMS), or
+   * left a voicemail after a screened call (`channel` = VOICE).
+   */
+  async handleCustomerReply(lead: Lead, text: string, channel: MessageChannel = REPLY_CHANNEL[lead.source]): Promise<HandleResult> {
     const { messages, events } = this.deps;
     const now = this.now();
     const wasClosed = lead.conversationStatus === "CLOSED";
     await messages.add({
-      leadId: lead.id, createdAt: now, direction: "INBOUND", channel: REPLY_CHANNEL[lead.source], recipient: "CUSTOMER",
+      leadId: lead.id, createdAt: now, direction: "INBOUND", channel, recipient: "CUSTOMER",
       body: text, deliveryStatus: "RECEIVED", providerMessageId: null, error: null,
     });
     await events.record(lead.id, "CUSTOMER_REPLIED", now, { turn: lead.customerTurns + 1 });
@@ -209,9 +242,15 @@ export class LeadQualificationService {
     lead: Lead,
     customerMessages: string[],
     knownFacts: Partial<Lead>,
-    options: { preferNew?: boolean } = {},
+    options: { preferNew?: boolean; timeoutMs?: number } = {},
   ): Promise<Lead> {
-    const extraction = await this.deps.extractor.extract({ customerMessages, knownFacts });
+    const request = { customerMessages, knownFacts };
+    const extraction = options.timeoutMs
+      ? await withTimeout(this.deps.extractor.extract(request), options.timeoutMs, () => {
+          log("extraction.timed_out", { leadId: lead.id, timeoutMs: options.timeoutMs ?? null });
+          return new FallbackLeadExtractor().extract(request);
+        })
+      : await this.deps.extractor.extract(request);
     await this.deps.events.record(lead.id, "EXTRACTED", this.now(), {
       method: extraction.method,
       fieldsFound: Object.entries(extraction.facts).filter(([, v]) => v !== null && v !== undefined).map(([k]) => k),
@@ -317,9 +356,14 @@ export class LeadQualificationService {
     return SCORE_RANK[lead.leadScore] > SCORE_RANK[lead.notifiedScore];
   }
 
-  private async notifyOwner(lead: Lead): Promise<void> {
+  /**
+   * Texts Amiram the lead summary (unless the lead is one he never hears
+   * about). `headline` goes above it, e.g. "📞 Missed call".
+   */
+  async notifyOwner(lead: Lead, headline?: string): Promise<void> {
     if (this.shouldSkipNotification(lead)) return this.markSkipped(lead);
-    const text = this.deps.summary.ownerNotification(lead);
+    const summary = this.deps.summary.ownerNotification(lead);
+    const text = headline ? `${headline}\n\n${summary}` : summary;
     const ok = await this.sendToOwner(lead, text);
     const now = this.now();
     await this.deps.leads.update(
@@ -358,6 +402,20 @@ export class LeadQualificationService {
   private async save(lead: Lead): Promise<void> {
     const { id, createdAt, receivedAt, source, externalLeadId, originalMessage, ...changes } = lead;
     await this.deps.leads.update(id, changes, this.now());
+  }
+}
+
+/** Resolves with `onTimeout()` if `promise` hasn't settled within `ms`. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), ms);
+  });
+  try {
+    const winner = await Promise.race([promise, timeout]);
+    return winner === "timeout" ? onTimeout() : winner;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

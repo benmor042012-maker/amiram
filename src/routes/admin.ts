@@ -89,6 +89,10 @@ export const adminRoutes = new Hono<AppEnv>()
     else await followUps.cancel(followUp);
     return c.json({ followUp: await followUpRepo.findById(followUp.id) });
   })
+  .get("/calls", async (c) => {
+    const since = c.req.query("since") ?? new Date(Date.now() - 30 * 86400_000).toISOString();
+    return c.json({ calls: await c.var.services.calls.listSince(since) });
+  })
   .get("/metrics", async (c) => {
     return c.json(await c.var.services.metrics.compute(c.req.query("from") ?? null, c.req.query("to") ?? null));
   });

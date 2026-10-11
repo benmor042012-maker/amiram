@@ -1,5 +1,7 @@
+import type { Call, CallRepository } from "../db/callRepository";
 import type { FollowUp } from "../db/followUpRepository";
 import type { NotificationProvider } from "../notifications/NotificationProvider";
+import { toE164 } from "../util/phone";
 import { EstimateFollowUpService, InvalidFollowUpError } from "./EstimateFollowUpService";
 
 /*
@@ -13,6 +15,8 @@ const USAGE = [
   "WON <name or phone>: estimate accepted, stop follow-up",
   "DONE <name or phone>: stop follow-up",
   "LIST: active follow-ups",
+  "CALLS: calls screened out in the last 24h",
+  "BLOCK / ALLOW / UNBLOCK <phone>: caller rules",
 ].join("\n");
 
 const PHONE_PATTERN = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
@@ -21,6 +25,8 @@ export class OwnerCommandService {
   constructor(
     private readonly followUps: EstimateFollowUpService,
     private readonly notifier: NotificationProvider,
+    private readonly calls?: CallRepository,
+    private readonly clock: () => Date = () => new Date(),
   ) {}
 
   /** Runs one command and texts the result back to Amiram. */
@@ -49,6 +55,13 @@ export class OwnerCommandService {
         });
       case "LIST":
         return this.list();
+      case "CALLS":
+        return this.screenedCalls();
+      case "BLOCK":
+      case "ALLOW":
+        return this.setCallerRule(verb.toUpperCase() as "BLOCK" | "ALLOW", rest);
+      case "UNBLOCK":
+        return this.clearCallerRule(rest);
       default:
         return `Didn't understand that.\n${USAGE}`;
     }
@@ -84,6 +97,39 @@ export class OwnerCommandService {
     return action(matches[0]!);
   }
 
+  /** Calls that did not ring Amiram, so he can spot a real customer. */
+  private async screenedCalls(): Promise<string> {
+    if (!this.calls) return "Call screening is not set up.";
+    const since = new Date(this.clock().getTime() - 24 * 3600_000).toISOString();
+    const calls = await this.calls.listSince(since);
+    const rang = calls.filter((c) => c.decision === "RING" || c.decision === "KNOWN_CALLER").length;
+    const out = calls.filter((c) => SCREENED_OUT.has(c.decision));
+    const lines = [`Calls (24h): ${calls.length} total, ${rang} rang you, ${out.length} screened out.`];
+    for (const c of out.slice(0, 8)) lines.push(`• ${c.fromE164 ?? "withheld"}: ${describeCall(c)}`);
+    if (out.length > 8) lines.push(`…and ${out.length - 8} more`);
+    if (out.length > 0) lines.push("Wrongly screened? Text ALLOW <phone>.");
+    return lines.join("\n");
+  }
+
+  private async setCallerRule(rule: "BLOCK" | "ALLOW", args: string): Promise<string> {
+    const phone = toE164(args.match(PHONE_PATTERN)?.[0]);
+    if (!this.calls) return "Call screening is not set up.";
+    if (!phone) return `Usage: ${rule} <phone>\nExample: ${rule} 310-555-1234`;
+    await this.calls.setRule(phone, rule, "OWNER", this.clock().toISOString(), null);
+    return rule === "BLOCK"
+      ? `🚫 ${phone} is blocked: their calls won't ring. Text UNBLOCK ${phone} to undo.`
+      : `✅ ${phone} always rings through now. Text UNBLOCK ${phone} to undo.`;
+  }
+
+  private async clearCallerRule(args: string): Promise<string> {
+    const phone = toE164(args.match(PHONE_PATTERN)?.[0]);
+    if (!this.calls) return "Call screening is not set up.";
+    if (!phone) return "Usage: UNBLOCK <phone>";
+    return (await this.calls.clearRule(phone))
+      ? `${phone} is back to normal screening.`
+      : `${phone} wasn't blocked or allowed.`;
+  }
+
   private async list(): Promise<string> {
     const active = await this.followUps.listActive();
     if (active.length === 0) return "No active follow-ups.";
@@ -93,4 +139,24 @@ export class OwnerCommandService {
       ...active.slice(0, 10).map((f) => `${f.customerName}: ${f.followUpStep}/${total} sent`),
     ].join("\n");
   }
+}
+
+const SCREENED_OUT = new Set<Call["decision"]>(["FILTERED", "BLOCKED", "VOICEMAIL", "NO_RESPONSE"]);
+
+const REASON_LABEL: Record<string, string> = {
+  "intent:SPAM": "spam",
+  "intent:VENDOR_SOLICITATION": "sales call",
+  "intent:JOB_SEEKER": "job inquiry",
+  "intent:UNRELATED": "not roofing",
+  "rule:out_of_area": "out of area",
+  "rule:renter": "renter",
+  blocklist: "blocked number",
+  no_speech: "didn't answer the question",
+};
+
+function describeCall(call: Call): string {
+  const reason = (call.reason && REASON_LABEL[call.reason]) ?? call.reason ?? call.decision.toLowerCase();
+  const said = call.speech ?? call.voicemailTranscript;
+  const voicemail = call.outcome === "VOICEMAIL" ? " (left voicemail)" : "";
+  return `${reason}${voicemail}${said ? ` "${said.length > 60 ? `${said.slice(0, 59)}…` : said}"` : ""}`;
 }

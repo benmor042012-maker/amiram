@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { adminRoutes } from "./routes/admin";
 import { smsRoutes } from "./routes/sms";
+import { voiceRoutes } from "./routes/voice";
 import { websiteRoutes } from "./routes/website";
 import { yelpRoutes } from "./routes/yelp";
 import { createServices, type ServiceOverrides, type Services } from "./services";
@@ -20,6 +21,7 @@ export function createApp(overrides: ServiceOverrides = {}) {
     .route("/api/yelp", yelpRoutes)
     .route("/api/website", websiteRoutes)
     .route("/api/sms", smsRoutes)
+    .route("/api/voice", voiceRoutes)
     .route("/api/admin", adminRoutes)
     .onError((error, c) => {
       logError("http.unhandled", error, { path: c.req.path });

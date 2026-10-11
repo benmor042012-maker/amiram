@@ -5,6 +5,9 @@ import {
   type LeadExtractor,
 } from "./ai/LeadExtractionService";
 import { LeadSummaryService } from "./ai/LeadSummaryService";
+import { CallScreeningService } from "./calls/CallScreeningService";
+import type { callScreeningConfig } from "./config/callScreening";
+import { CallRepository } from "./db/callRepository";
 import { EventRepository } from "./db/eventRepository";
 import { LeadRepository } from "./db/leadRepository";
 import { FollowUpRepository } from "./db/followUpRepository";
@@ -37,6 +40,9 @@ export interface Services {
   followUps: EstimateFollowUpService;
   smsInbound: SmsInboundService;
   metrics: MetricsService;
+  calls: CallRepository;
+  /** Null when OWNER_PHONE is not set (there is nobody to ring). */
+  callScreening: ((baseUrl: string) => CallScreeningService) | null;
 }
 
 export interface ServiceOverrides {
@@ -45,6 +51,7 @@ export interface ServiceOverrides {
   /** Raw provider; the opt-out guard is always applied on top. */
   customerMessaging?: CustomerMessagingProvider;
   clock?: () => Date;
+  callScreeningConfig?: typeof callScreeningConfig;
 }
 
 const DEFAULT_MODEL = "claude-opus-5";
@@ -73,12 +80,14 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}): Serv
     optOuts,
   );
 
+  const calls = new CallRepository(env.DB);
+  const scoring = new LeadScoringService();
   const qualification = new LeadQualificationService({
     leads,
     messages,
     events,
     extractor,
-    scoring: new LeadScoringService(),
+    scoring,
     conversation: new ConversationService(),
     summary: new LeadSummaryService(),
     notifier,
@@ -100,7 +109,7 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}): Serv
     followUpRepo,
     qualification,
     followUps,
-    ownerCommands: new OwnerCommandService(followUps, notifier),
+    ownerCommands: new OwnerCommandService(followUps, notifier, calls, overrides.clock),
     ownerPhone: env.OWNER_PHONE,
     clock: overrides.clock,
   });
@@ -108,6 +117,17 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}): Serv
   return {
     leads, messages, events, optOuts, followUpRepo, qualification, followUps, smsInbound,
     metrics: new MetricsService(env.DB),
+    calls,
+    callScreening: env.OWNER_PHONE
+      ? (baseUrl) =>
+          new CallScreeningService(
+            {
+              calls, leads, messages, events, followUpRepo, qualification, scoring, notifier,
+              ownerPhone: env.OWNER_PHONE!, clock: overrides.clock, config: overrides.callScreeningConfig,
+            },
+            baseUrl,
+          )
+      : null,
   };
 }
 
